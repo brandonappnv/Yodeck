@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sierra Miles TechOps Display</title>
+    <!-- Tailwind for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React and Recharts Dependencies -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/recharts/umd/Recharts.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @keyframes ticker {
+            0% { transform: translateX(100%); }
+            100% { transform: translateX(-100%); }
+        }
+        body, html { 
+            margin: 0; 
+            padding: 0; 
+            height: 100vh; 
+            width: 100vw; 
+            overflow: hidden; 
+            background-color: #020617;
+        }
+        .recharts-cartesian-grid-horizontal line, .recharts-cartesian-grid-vertical line {
+            stroke: #1e293b;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        const { 
+            BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, 
+            AreaChart, Area, defs, linearGradient, stop 
+        } = Recharts;
+
+        // Custom Icon Component to handle Lucide in raw HTML
+        const Icon = ({ name, size = 16, className = "" }) => {
+            const [svg, setSvg] = useState("");
+            useEffect(() => {
+                if (window.lucide) {
+                    const iconSvg = lucide.createIcons.icons[name];
+                    // Fallback to basic rendering if Lucide is still loading
+                }
+            }, [name]);
+            // Simplification: Using inline SVGs for critical icons or standard Lucide elements
+            return <i data-lucide={name} style={{width: size, height: size}} className={className}></i>;
+        };
+
+        const App = () => {
+            const BRAND_COLORS = {
+                primary: '#2563eb',
+                secondary: '#0ea5e9',
+                success: '#10b981',
+                warning: '#f59e0b',
+                danger: '#ef4444',
+            };
+
+            const [time, setTime] = useState(new Date().toLocaleTimeString());
+            const [heartbeat, setHeartbeat] = useState(true);
+            const [metrics, setMetrics] = useState({ trafficData: [], laborData: [], nodeStatus: [], kpis: [] });
+
+            const generateData = () => {
+                const traffic = Array.from({ length: 20 }, (_, i) => ({
+                    time: i, threats: Math.floor(Math.random() * 10)
+                }));
+                const labor = [
+                    { name: 'MON', billable: 4.2, nonBillable: 3.8 },
+                    { name: 'TUE', billable: 3.8, nonBillable: 4.2 },
+                    { name: 'WED', billable: 5.1, nonBillable: 2.9 },
+                    { name: 'THU', billable: 2.5, nonBillable: 5.5 },
+                    { name: 'FRI', billable: 3.2 + (Math.random() * 0.5), nonBillable: 4.8 },
+                ];
+                const nodes = [
+                    { id: 'DC-01', status: 'up' }, { id: 'DC-02', status: 'up' }, { id: 'VPN-GW', status: 'up' },
+                    { id: 'PBX-01', status: Math.random() > 0.8 ? 'warning' : 'up' }, { id: 'BKUP-SVR', status: 'up' }, 
+                    { id: 'SQL-01', status: 'up' }, { id: 'MAIL-G', status: 'up' }, { id: 'WEB-01', status: 'up' }, 
+                    { id: 'DNS-01', status: 'up' }, { id: 'AUTH-P', status: 'up' }, { id: 'SOC-P', status: 'up' }, { id: 'FS-01', status: 'up' },
+                ];
+                const kpis = [
+                    { title: 'SLA COMPLIANCE', value: (99.2 + Math.random() * 0.5).toFixed(1) + '%', status: 'optimal' },
+                    { title: 'AVG RESPONSE', value: Math.floor(10 + Math.random() * 5) + 'm', status: 'optimal' },
+                    { title: 'OPEN TICKETS', value: Math.floor(10 + Math.random() * 10), status: 'warning' },
+                    { title: 'STALE TICKETS', value: Math.floor(Math.random() * 4), status: 'danger' },
+                ];
+                setMetrics({ trafficData: traffic, laborData: labor, nodeStatus: nodes, kpis });
+            };
+
+            useEffect(() => {
+                generateData();
+                const clockTimer = setInterval(() => setTime(new Date().toLocaleTimeString()), 1000);
+                const hbTimer = setInterval(() => setHeartbeat(prev => !prev), 2000);
+                const dataTimer = setInterval(() => generateData(), 15000);
+                setTimeout(() => lucide.createIcons(), 500); // Initialize icons
+                return () => { clearInterval(clockTimer); clearInterval(hbTimer); clearInterval(dataTimer); };
+            }, []);
+
+            const ProgressRing = ({ current, goal, label }) => {
+                const percent = Math.min((current / goal) * 100, 100);
+                const circumference = 2 * Math.PI * 40;
+                const offset = circumference - (percent / 100) * circumference;
+                return (
+                    <div className="flex flex-col items-center justify-center">
+                        <div className="relative w-16 h-16 md:w-20 md:h-20">
+                            <svg className="w-full h-full transform -rotate-90">
+                                <circle cx="50%" cy="50%" r="35" stroke="#1e293b" strokeWidth="6" fill="transparent" />
+                                <circle cx="50%" cy="50%" r="35" stroke={percent >= 80 ? BRAND_COLORS.success : BRAND_COLORS.secondary} strokeWidth="6" fill="transparent" strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round" className="transition-all duration-1000" />
+                            </svg>
+                            <div className="absolute inset-0 flex items-center justify-center flex-col">
+                                <span className="text-base md:text-lg font-mono font-bold text-white">{current.toFixed(1)}</span>
+                            </div>
+                        </div>
+                        <span className="text-[8px] font-black mt-1 text-slate-500 uppercase tracking-widest">{label}</span>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="h-screen w-screen bg-[#020617] text-slate-300 font-sans p-4 overflow-hidden flex flex-col">
+                    <header className="flex items-center justify-between border-b border-blue-500/20 pb-3 mb-4 flex-shrink-0">
+                        <div className="flex items-center gap-5">
+                            <div className="bg-blue-600 p-2 rounded border border-blue-400/20">
+                                <i data-lucide="shield" className="text-white w-5 h-5"></i>
+                            </div>
+                            <div>
+                                <h1 className="text-xl font-black tracking-tighter text-white uppercase italic leading-none">
+                                    Sierra Miles <span className="text-blue-400 not-italic">TECH OPS</span>
+                                </h1>
+                                <div className="flex items-center gap-3 text-[8px] font-mono tracking-widest mt-1">
+                                    <span className={`h-1.5 w-1.5 rounded-full ${heartbeat ? 'bg-emerald-400 shadow-[0_0_8px_#10b981]' : 'bg-emerald-900'}`}></span>
+                                    <span className="text-emerald-400 font-bold uppercase tracking-[0.2em]">Live Network</span>
+                                    <span className="text-slate-700">/</span>
+                                    <span>{time}</span>
+                                    <span className="text-slate-700">/</span>
+                                    <span className="text-blue-500/50 animate-pulse uppercase">Sync 15s</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex gap-6">
+                            <div className="flex flex-col items-end justify-center border-r border-slate-800 pr-6">
+                                <p className="text-[7px] text-slate-500 font-black uppercase mb-1">Fleet Connect</p>
+                                <div className="flex gap-1">
+                                    {metrics.nodeStatus.map((n, i) => <div key={i} className={`w-1 h-3 rounded-sm ${n.status === 'up' ? 'bg-emerald-500/20' : 'bg-amber-500 animate-pulse'}`}></div>)}
+                                </div>
+                            </div>
+                            <div className="flex flex-col items-end justify-center">
+                                <p className="text-[7px] text-slate-500 font-black uppercase mb-1">System Load</p>
+                                <div className="text-lg font-mono font-bold text-white italic">42.8<span className="text-blue-500 text-[10px] ml-1">%</span></div>
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="grid grid-cols-12 gap-4 flex-grow min-h-0 mb-10 overflow-hidden">
+                        <div className="col-span-3 flex flex-col gap-4 min-h-0">
+                            <section className="bg-slate-900/20 border border-slate-800/40 p-4 rounded-xl flex-shrink-0">
+                                <h3 className="text-[8px] font-black uppercase tracking-[0.2em] text-blue-400 flex items-center gap-2 mb-3">
+                                    <i data-lucide="target" className="w-3 h-3"></i> Labor Utilization
+                                </h3>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <ProgressRing current={3.2} goal={4} label="Day" />
+                                    <ProgressRing current={18.5} goal={20} label="Week" />
+                                </div>
+                            </section>
+                            <section className="bg-slate-900/20 border border-slate-800/40 p-4 rounded-xl flex-grow flex flex-col min-h-0 overflow-hidden">
+                                <h3 className="text-[8px] font-black uppercase tracking-[0.2em] text-blue-400 mb-3 flex items-center gap-2">
+                                    <i data-lucide="users" className="w-3 h-3"></i> Tech Leaders
+                                </h3>
+                                <div className="space-y-2">
+                                    {['Alex M.', 'Sarah J.', 'David K.', 'Elena R.'].map((name, i) => (
+                                        <div key={i} className="flex items-center justify-between p-2 bg-slate-950/30 border border-slate-800/30 rounded-lg">
+                                            <div className="flex items-center gap-2">
+                                                <div className="w-5 h-5 rounded bg-blue-500/10 flex items-center justify-center text-[8px] font-bold text-blue-400 italic">#{i+1}</div>
+                                                <p className="text-[9px] font-bold text-white uppercase">{name}</p>
+                                            </div>
+                                            <p className="text-[10px] font-mono font-black text-blue-400 italic">{(4.2 - (i*0.3)).toFixed(1)}h</p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </section>
+                        </div>
+
+                        <div className="col-span-6 flex flex-col gap-4 min-h-0">
+                            <section className="bg-slate-900/20 border border-slate-800/40 p-4 rounded-xl flex-grow flex flex-col min-h-0 overflow-hidden">
+                                <div className="flex justify-between items-center mb-4 flex-shrink-0">
+                                    <h3 className="text-[8px] font-black uppercase tracking-[0.2em] text-blue-400 flex items-center gap-2">
+                                        <i data-lucide="bar-chart-3" className="w-3 h-3"></i> Ticket Resolution Trend
+                                    </h3>
+                                </div>
+                                <div className="flex-grow w-full min-h-0">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <BarChart data={metrics.laborData} margin={{ top: 0, right: 0, left: -25, bottom: 0 }}>
+                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#1e293b" />
+                                            <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#475569', fontSize: 9}} />
+                                            <YAxis axisLine={false} tickLine={false} tick={{fill: '#475569', fontSize: 9}} />
+                                            <Bar dataKey="billable" stackId="a" fill={BRAND_COLORS.primary} barSize={35} />
+                                            <Bar dataKey="nonBillable" stackId="a" fill="#1e293b" barSize={35} />
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            </section>
+                            <section className="bg-slate-950 border border-slate-800/50 p-4 rounded-xl h-[180px] flex-shrink-0 flex flex-col overflow-hidden">
+                                <h3 className="text-[8px] font-black uppercase tracking-[0.2em] text-rose-500 mb-3 flex items-center gap-2">
+                                    <i data-lucide="activity" className="w-3 h-3 animate-pulse"></i> Network Anomaly Detection
+                                </h3>
+                                <div className="flex-grow w-full min-h-0 opacity-50">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <AreaChart data={metrics.trafficData} margin={{ top: 0, right: 0, left: -25, bottom: 0 }}>
+                                            <Area type="step" dataKey="threats" stroke={BRAND_COLORS.danger} fill={BRAND_COLORS.danger} fillOpacity={0.1} strokeWidth={2} isAnimationActive={false} />
+                                        </AreaChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            </section>
+                        </div>
+
+                        <div className="col-span-3 flex flex-col gap-4 min-h-0">
+                            <div className="grid grid-cols-2 gap-2 flex-shrink-0">
+                                {metrics.kpis.map((kpi, i) => (
+                                    <div key={i} className="bg-slate-900/20 border border-slate-800/40 p-2.5 rounded-xl flex flex-col items-center justify-center text-center">
+                                        <p className="text-[6px] font-black text-slate-500 tracking-widest uppercase mb-1">{kpi.title}</p>
+                                        <p className={`text-sm font-mono font-black italic ${kpi.status === 'optimal' ? 'text-emerald-400' : kpi.status === 'warning' ? 'text-amber-500' : 'text-rose-500'}`}>{kpi.value}</p>
+                                    </div>
+                                ))}
+                            </div>
+                            <section className="bg-blue-950/10 border border-blue-500/20 rounded-xl flex-grow flex flex-col min-h-0 overflow-hidden">
+                                <div className="p-2 bg-blue-500/5 border-b border-blue-500/10 flex items-center justify-between">
+                                    <span className="text-[8px] font-black uppercase text-blue-400 flex items-center gap-2"><i data-lucide="terminal" className="w-3 h-3"></i> Ops Console</span>
+                                </div>
+                                <div className="flex-grow p-3 font-mono text-[8px] space-y-1 opacity-60 overflow-hidden">
+                                    <p className="text-emerald-500 truncate">> SYSLOG: REPLICATION SUCCESSFUL</p>
+                                    <p className="text-slate-500 truncate">> TICKETS: 14 OPEN / 2 STALE</p>
+                                    <p className="text-blue-400 truncate">> BACKUP: SQL-01 JOB COMPLETE</p>
+                                    <p className="text-amber-500 animate-pulse truncate">> MONITOR: PBX-01 LATENCY</p>
+                                </div>
+                            </section>
+                            <section className="bg-slate-950 border border-rose-900/20 rounded-xl h-[180px] flex-shrink-0 relative overflow-hidden flex items-center justify-center">
+                                <i data-lucide="globe" className="w-24 h-24 text-slate-900 opacity-20"></i>
+                                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-3 h-3 bg-rose-500 rounded-full animate-ping"></div>
+                                <div className="absolute bottom-4 left-4 text-[7px] font-bold text-slate-600 uppercase tracking-widest">SOC Scan: Active</div>
+                            </section>
+                        </div>
+                    </main>
+
+                    <footer className="fixed bottom-0 left-0 right-0 bg-[#020617] border-t border-blue-900/30 h-7 flex items-center z-50">
+                        <div className="bg-blue-600 h-full px-4 flex items-center text-[8px] font-black text-white italic skew-x-[-15deg] -ml-2 z-20">OPS STATUS: NOMINAL</div>
+                        <div className="flex-grow overflow-hidden relative">
+                            <div className="whitespace-nowrap animate-[ticker_40s_linear_infinite] flex gap-20 text-[8px] font-mono font-bold text-slate-600 uppercase tracking-widest">
+                                <span>[SYSTEM] BKUP-SVR LATENCY STABILIZED 0ms</span>
+                                <span className="text-blue-400">• TEAM BILLABLE TARGET: 92% •</span>
