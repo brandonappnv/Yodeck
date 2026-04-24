@@ -480,6 +480,91 @@ def is_p0_ticket(ticket: Dict[str, Any]) -> bool:
     return any(k in title for k in p0_keywords)
 
 
+ALERT_SOURCE_KEYWORDS = ("alert", "monitoring", "datto rmm", "kaseya", "ninja", "auvik", "connectwise automate")
+ALERT_TITLE_PREFIXES = ("[alert]", "alert:", "[monitoring]", "monitoring:", "[rmm]", "rmm:")
+
+
+def is_alert_ticket(ticket: Dict[str, Any]) -> bool:
+    for key in ("source", "sourceName", "sourceLabel", "sourceText"):
+        val = str(ticket.get(key) or "").lower()
+        if any(k in val for k in ALERT_SOURCE_KEYWORDS):
+            return True
+    issue = str(ticket.get("issueType") or "").lower()
+    sub_issue = str(ticket.get("subIssueType") or "").lower()
+    if "alert" in issue or "monitoring" in issue:
+        return True
+    if "alert" in sub_issue or "monitoring" in sub_issue:
+        return True
+    title = ticket_text_field(ticket).lower()
+    if any(title.startswith(prefix) for prefix in ALERT_TITLE_PREFIXES):
+        return True
+    return False
+
+
+def day_start_at_7am(now: datetime) -> datetime:
+    local_now = now.astimezone(PACIFIC_TZ)
+    start_local = local_now.replace(hour=7, minute=0, second=0, microsecond=0)
+    if local_now < start_local:
+        start_local = start_local - timedelta(days=1)
+    return start_local.astimezone(timezone.utc)
+
+
+def build_day_progress(
+    recent_tickets: List[Dict[str, Any]],
+    resolved_tickets: List[Dict[str, Any]],
+    now: datetime,
+) -> Dict[str, Any]:
+    start = day_start_at_7am(now)
+    bucket_minutes = 15
+    bucket_sec = bucket_minutes * 60
+    elapsed_min = max(0, int((now - start).total_seconds() // 60))
+    num_buckets = max(1, (elapsed_min // bucket_minutes) + 1)
+
+    incoming_counts = [0] * num_buckets
+    resolved_counts = [0] * num_buckets
+
+    for ticket in recent_tickets:
+        if is_alert_ticket(ticket):
+            continue
+        created = ticket_created_dt(ticket)
+        if created is None or created < start or created > now:
+            continue
+        idx = int((created - start).total_seconds() // bucket_sec)
+        if 0 <= idx < num_buckets:
+            incoming_counts[idx] += 1
+
+    for ticket in resolved_tickets:
+        if is_alert_ticket(ticket):
+            continue
+        resolved_at = parse_dt(ticket.get("resolvedDateTime"))
+        if resolved_at is None or resolved_at < start or resolved_at > now:
+            continue
+        idx = int((resolved_at - start).total_seconds() // bucket_sec)
+        if 0 <= idx < num_buckets:
+            resolved_counts[idx] += 1
+
+    incoming_series: List[Dict[str, int]] = []
+    resolved_series: List[Dict[str, int]] = []
+    cum_in = 0
+    cum_out = 0
+    for i in range(num_buckets):
+        cum_in += incoming_counts[i]
+        cum_out += resolved_counts[i]
+        incoming_series.append({"m": i * bucket_minutes, "v": cum_in})
+        resolved_series.append({"m": i * bucket_minutes, "v": cum_out})
+
+    return {
+        "startIso": to_iso_z(start),
+        "nowIso": to_iso_z(now),
+        "bucketMinutes": bucket_minutes,
+        "elapsedMinutes": elapsed_min,
+        "incoming": incoming_series,
+        "resolved": resolved_series,
+        "incomingTotal": cum_in,
+        "resolvedTotal": cum_out,
+    }
+
+
 def build_network_traffic(tickets: List[Dict[str, Any]], now: datetime) -> List[Dict[str, int]]:
     buckets = [0 for _ in range(20)]
     window_hours = 72
@@ -766,9 +851,12 @@ def build_focus_technicians(
     hours_by_id: Dict[int, float],
     utilization_by_id: Dict[int, int],
     now: datetime,
+    recent_tickets: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     open_by_id: Dict[int, int] = {}
     stale_by_id: Dict[int, int] = {}
+    waiting_cust_by_id: Dict[int, int] = {}
+    past_due_by_id: Dict[int, int] = {}
     stale_seconds = STALE_HOURS * 3600
 
     for t in open_tickets:
@@ -777,6 +865,23 @@ def build_focus_technicians(
         last_dt = ticket_last_activity_dt(t)
         if last_dt and (now - last_dt).total_seconds() > stale_seconds:
             stale_by_id[rid_int] = stale_by_id.get(rid_int, 0) + 1
+        status_text = ticket_status_text(t).lower()
+        if "waiting customer" in status_text or "waiting on customer" in status_text:
+            waiting_cust_by_id[rid_int] = waiting_cust_by_id.get(rid_int, 0) + 1
+        if not is_waiting_status(t):
+            due = (
+                parse_dt(t.get("dueDateTime"))
+                or parse_dt(t.get("resolutionPlanDateTime"))
+                or parse_dt(t.get("firstResponseDueDateTime"))
+            )
+            if due is not None and due < now:
+                past_due_by_id[rid_int] = past_due_by_id.get(rid_int, 0) + 1
+
+    per_tech_recent: Dict[int, List[Dict[str, Any]]] = {}
+    if recent_tickets:
+        for t in recent_tickets:
+            rid_int = assigned_resource_id(t)
+            per_tech_recent.setdefault(rid_int, []).append(t)
 
     roster: List[Dict[str, Any]] = []
     for focus in focus_resources:
@@ -788,6 +893,11 @@ def build_focus_technicians(
                     "state": "MISSING",
                     "openTickets": 0,
                     "staleTickets": 0,
+                    "waitingCustomer": 0,
+                    "pastDueActive": 0,
+                    "slaPct": 0.0,
+                    "slaSample": 0,
+                    "avgResponseMinutes": None,
                     "utilizationPct": 0,
                     "utilizationColor": "#ef4444",
                     "hoursWorkedToday": 0.0,
@@ -797,6 +907,11 @@ def build_focus_technicians(
         rid_int = int(rid)
         open_count = open_by_id.get(rid_int, 0)
         stale_count = stale_by_id.get(rid_int, 0)
+        waiting_cust = waiting_cust_by_id.get(rid_int, 0)
+        past_due = past_due_by_id.get(rid_int, 0)
+        tech_recent = per_tech_recent.get(rid_int, [])
+        sla_pct, sla_sample = compute_sla_compliance(tech_recent, now)
+        avg_response = compute_avg_response_minutes(tech_recent)
         hours_worked = round(hours_by_id.get(rid_int, 0.0), 2)
         utilization_pct = utilization_by_id.get(rid_int, utilization_pct_from_hours(hours_worked))
         if open_count >= 12:
@@ -813,6 +928,11 @@ def build_focus_technicians(
                 "state": state,
                 "openTickets": open_count,
                 "staleTickets": stale_count,
+                "waitingCustomer": waiting_cust,
+                "pastDueActive": past_due,
+                "slaPct": sla_pct,
+                "slaSample": sla_sample,
+                "avgResponseMinutes": avg_response,
                 "utilizationPct": utilization_pct,
                 "utilizationColor": utilization_color(utilization_pct),
                 "hoursWorkedToday": hours_worked,
@@ -1177,6 +1297,16 @@ def fallback_payload(source: str, status: str, note: str) -> Dict[str, Any]:
         "networkStatus": {"active": False, "clientName": "", "deviceCount": 0, "openFor": ""},
         "ticketMix": [],
         "ttrByTech": [],
+        "dayProgress": {
+            "startIso": "",
+            "nowIso": "",
+            "bucketMinutes": 15,
+            "elapsedMinutes": 0,
+            "incoming": [],
+            "resolved": [],
+            "incomingTotal": 0,
+            "resolvedTotal": 0,
+        },
     }
     return data
 
@@ -1446,7 +1576,15 @@ async def get_techops(request: Request) -> Dict[str, Any]:
         labor, targets = build_labor(focus_recent_tickets, now)
         targets = build_target_summary(focus_resources, hours_by_id, utilization_by_id)
         traffic = build_network_traffic(recent_tickets, now)
-        technicians = build_focus_technicians(focus_open_tickets, focus_resources, hours_by_id, utilization_by_id, now)
+        day_progress = build_day_progress(recent_tickets, resolved_tickets, now)
+        technicians = build_focus_technicians(
+            focus_open_tickets,
+            focus_resources,
+            hours_by_id,
+            utilization_by_id,
+            now,
+            focus_recent_tickets,
+        )
         ticket_mix = build_ticket_mix(focus_resources, focus_open_tickets, focus_resolved_tickets, now)
         ttr_by_tech = build_ttr_by_tech(focus_resources, focus_resolved_tickets, now)
         network_status = build_network_status(open_tickets, now)
@@ -1493,6 +1631,7 @@ async def get_techops(request: Request) -> Dict[str, Any]:
             "networkStatus": network_status,
             "ticketMix": ticket_mix,
             "ttrByTech": ttr_by_tech,
+            "dayProgress": day_progress,
         }
         LAST_GOOD_PAYLOAD = payload
         return payload
