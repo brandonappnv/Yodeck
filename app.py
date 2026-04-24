@@ -244,8 +244,10 @@ def normalize_next_page_path(value: Any) -> Optional[str]:
     else:
         path = raw
     marker = "/atservicesrest/v1.0/"
-    if marker in path:
-        path = path.split(marker, 1)[1]
+    lower = path.lower()
+    if marker in lower:
+        idx = lower.index(marker) + len(marker)
+        path = path[idx:]
     return path.lstrip("/")
 
 
