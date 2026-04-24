@@ -230,6 +230,8 @@ def direct_autotask_enabled() -> bool:
 
 
 def current_data_source() -> str:
+    if SMG_API_KEY:
+        return "LIVE_AZURE_AUTOTASK"
     if direct_autotask_enabled():
         return "LIVE_AUTOTASK_DIRECT"
     return "LIVE_AZURE_AUTOTASK"
@@ -1171,6 +1173,147 @@ async def direct_autotask_request(method: str, path: str, body: Optional[Dict[st
     return response.json()
 
 
+def to_mcp_autotask_body(body: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(body, dict):
+        return body
+    out = dict(body)
+    if "Filter" in out and "filter" not in out:
+        out["filter"] = out["Filter"]
+    if "MaxRecords" in out and "max_records" not in out:
+        out["max_records"] = out["MaxRecords"]
+    return out
+
+
+def assert_mcp_autotask_success(result: Any) -> Dict[str, Any]:
+    if isinstance(result, dict):
+        if result.get("success") is False:
+            err = result.get("error")
+            if isinstance(err, dict):
+                msg = str(err.get("message") or err.get("code") or "Autotask MCP request failed.")
+            else:
+                msg = str(err or "Autotask MCP request failed.")
+            raise RuntimeError(msg)
+        if result.get("error") is True:
+            msg = str(result.get("response") or result.get("message") or "Autotask MCP request failed.")
+            raise RuntimeError(msg)
+        nested_error = result.get("error")
+        if isinstance(nested_error, dict):
+            msg = nested_error.get("message")
+            if msg:
+                raise RuntimeError(str(msg))
+        return result
+    if isinstance(result, str) and result.strip().lower().startswith("error executing tool"):
+        raise RuntimeError(result)
+    raise RuntimeError("Autotask MCP request returned an unexpected response type.")
+
+
+def compare_values(left: Any, op: str, right: Any) -> bool:
+    op_norm = str(op or "").lower()
+    left_dt = parse_dt(left)
+    right_dt = parse_dt(right)
+    if left_dt is not None and right_dt is not None:
+        if op_norm == "eq":
+            return left_dt == right_dt
+        if op_norm in {"noteq", "neq"}:
+            return left_dt != right_dt
+        if op_norm == "gte":
+            return left_dt >= right_dt
+        if op_norm == "gt":
+            return left_dt > right_dt
+        if op_norm == "lte":
+            return left_dt <= right_dt
+        if op_norm == "lt":
+            return left_dt < right_dt
+    left_num = parse_number(left)
+    right_num = parse_number(right)
+    if left_num is not None and right_num is not None:
+        if op_norm == "eq":
+            return left_num == right_num
+        if op_norm in {"noteq", "neq"}:
+            return left_num != right_num
+        if op_norm == "gte":
+            return left_num >= right_num
+        if op_norm == "gt":
+            return left_num > right_num
+        if op_norm == "lte":
+            return left_num <= right_num
+        if op_norm == "lt":
+            return left_num < right_num
+    left_str = str(left or "").strip().lower()
+    right_str = str(right or "").strip().lower()
+    if op_norm == "eq":
+        return left_str == right_str
+    if op_norm in {"noteq", "neq"}:
+        return left_str != right_str
+    if op_norm == "contains":
+        return right_str in left_str
+    return True
+
+
+def item_matches_filters(item: Dict[str, Any], filters: Optional[List[Dict[str, Any]]]) -> bool:
+    if not filters:
+        return True
+    for flt in filters:
+        field = str(flt.get("field") or "").strip()
+        if not field:
+            continue
+        op = str(flt.get("op") or "eq")
+        expected = flt.get("value")
+        if not compare_values(item.get(field), op, expected):
+            return False
+    return True
+
+
+async def mcp_tickets_by_status_sweep(max_records: int) -> List[Dict[str, Any]]:
+    statuses = [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13]
+    out: List[Dict[str, Any]] = []
+    seen_ids: set[int] = set()
+    for status in statuses:
+        raw = await call_tool(
+            "autotask_query_tickets",
+            {"status": status, "max_records": min(200, max_records)},
+        )
+        parsed = assert_mcp_autotask_success(raw)
+        for item in coerce_items(parsed):
+            tid = item.get("id")
+            try:
+                tid_int = int(tid)
+            except (TypeError, ValueError):
+                tid_int = -1
+            if tid_int in seen_ids:
+                continue
+            if tid_int > 0:
+                seen_ids.add(tid_int)
+            out.append(item)
+            if len(out) >= max_records:
+                return out
+    return out
+
+
+async def autotask_request_with_fallback(method: str, path: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if SMG_API_KEY:
+        try:
+            result = await call_tool(
+                "autotask_api_request",
+                {"method": method.upper(), "path": path, "body": to_mcp_autotask_body(body)} if body is not None else {"method": method.upper(), "path": path},
+            )
+            return assert_mcp_autotask_success(result)
+        except Exception:
+            if not direct_autotask_enabled():
+                raise
+    if direct_autotask_enabled():
+        try:
+            return await direct_autotask_request(method, path, body)
+        except Exception:
+            if not SMG_API_KEY:
+                raise
+    result = await call_tool(
+        "autotask_api_request",
+        {"method": method.upper(), "path": path, "body": to_mcp_autotask_body(body)} if body is not None else {"method": method.upper(), "path": path},
+    )
+    return assert_mcp_autotask_success(result)
+
+
 async def ensure_mcp_session() -> Optional[str]:
     global MCP_SESSION_ID
     if MCP_SESSION_ID is not None:
@@ -1243,18 +1386,31 @@ async def call_tool(tool_name: str, params: Dict[str, Any]) -> Any:
 
 async def autotask_query(entity: str, filters: Optional[List[Dict[str, Any]]] = None, max_records: int = 500) -> List[Dict[str, Any]]:
     body: Dict[str, Any] = {"MaxRecords": max_records}
+    body["maxRecords"] = max_records
     if filters:
         body["Filter"] = filters
+        body["filter"] = filters
 
-    if direct_autotask_enabled():
-        first_page = await direct_autotask_request("POST", f"{entity}/query", body)
-    else:
-        first_page = await call_tool(
-            "autotask_api_request",
-            {"method": "POST", "path": f"{entity}/query", "body": body},
-        )
+    first_page = await autotask_request_with_fallback("POST", f"{entity}/query", body)
 
     items = coerce_items(first_page)
+    if not items and SMG_API_KEY and not direct_autotask_enabled() and entity == "Tickets":
+        sweep_items = await mcp_tickets_by_status_sweep(max_records=max_records * 2)
+        items = [x for x in sweep_items if item_matches_filters(x, filters)]
+    if not items and SMG_API_KEY and not direct_autotask_enabled() and entity == "Resources":
+        raw_resources = await call_tool("autotask_find_resource", {"isActive": True, "max_records": max_records})
+        items = coerce_items(assert_mcp_autotask_success(raw_resources))
+    if not items and SMG_API_KEY and not direct_autotask_enabled() and entity == "TimeEntries":
+        date_worked = None
+        for flt in filters or []:
+            if str(flt.get("field")) == "dateWorked":
+                date_worked = flt.get("value")
+                break
+        raw_entries = await call_tool(
+            "autotask_query_time_entries",
+            {"dateWorked": date_worked, "max_records": max_records} if date_worked else {"max_records": max_records},
+        )
+        items = coerce_items(assert_mcp_autotask_success(raw_entries))
     if len(items) >= max_records:
         return items[:max_records]
 
@@ -1264,13 +1420,7 @@ async def autotask_query(entity: str, filters: Optional[List[Dict[str, Any]]] = 
     page_count = 1
 
     while next_path and len(items) < max_records and page_count < 5:
-        if direct_autotask_enabled():
-            next_page = await direct_autotask_request("GET", next_path)
-        else:
-            next_page = await call_tool(
-                "autotask_api_request",
-                {"method": "GET", "path": next_path},
-            )
+        next_page = await autotask_request_with_fallback("GET", next_path)
         items.extend(coerce_items(next_page))
         page_details = next_page.get("pageDetails") if isinstance(next_page, dict) else {}
         next_url = page_details.get("nextPageUrl") if isinstance(page_details, dict) else None
@@ -1307,30 +1457,44 @@ async def get_techops(request: Request) -> Dict[str, Any]:
     source_name = current_data_source()
 
     try:
-        open_tickets = await autotask_query(
+        warnings: List[str] = []
+
+        async def safe_query(label: str, entity: str, filters: Optional[List[Dict[str, Any]]], max_records: int) -> List[Dict[str, Any]]:
+            try:
+                return await autotask_query(entity, filters=filters, max_records=max_records)
+            except Exception as query_ex:
+                warnings.append(f"{label}: {str(query_ex)}")
+                return []
+
+        open_tickets = await safe_query(
+            "open_tickets",
             "Tickets",
-            filters=[{"field": "status", "op": "noteq", "value": 5}],
-            max_records=500,
+            [{"field": "status", "op": "noteq", "value": 5}],
+            500,
         )
-        recent_tickets = await autotask_query(
+        recent_tickets = await safe_query(
+            "recent_tickets",
             "Tickets",
-            filters=[{"field": "createDate", "op": "gte", "value": to_iso_z(recent_30d)}],
-            max_records=700,
+            [{"field": "createDate", "op": "gte", "value": to_iso_z(recent_30d)}],
+            700,
         )
-        resolved_tickets = await autotask_query(
+        resolved_tickets = await safe_query(
+            "resolved_tickets",
             "Tickets",
-            filters=[{"field": "resolvedDateTime", "op": "gte", "value": to_iso_z(recent_30d)}],
-            max_records=700,
+            [{"field": "resolvedDateTime", "op": "gte", "value": to_iso_z(recent_30d)}],
+            700,
         )
-        resources = await autotask_query("Resources", filters=[{"field": "isActive", "op": "eq", "value": True}], max_records=500)
-        today_entries = await autotask_query(
+        resources = await safe_query("resources", "Resources", [{"field": "isActive", "op": "eq", "value": True}], 500)
+        today_entries = await safe_query(
+            "today_entries",
             "TimeEntries",
-            filters=[{"field": "dateWorked", "op": "eq", "value": local_date_string(now)}],
-            max_records=500,
+            [{"field": "dateWorked", "op": "eq", "value": local_date_string(now)}],
+            500,
         )
         try:
             utilization_rows = await fetch_utilization_summary(now)
-        except Exception:
+        except Exception as util_ex:
+            warnings.append(f"utilization_summary: {str(util_ex)}")
             utilization_rows = []
 
         focus_resources = select_focus_resources(resources)
@@ -1359,25 +1523,33 @@ async def get_techops(request: Request) -> Dict[str, Any]:
         kpis = build_kpis(sla_pct, avg_response_minutes, open_count, stale_count, waiting_customer_count, past_due_count)
         try:
             rc_metrics = await fetch_ringcentral_call_metrics(now)
-        except Exception:
+        except Exception as rc_ex:
+            warnings.append(f"ringcentral_metrics: {str(rc_ex)}")
             rc_metrics = fallback_ringcentral_call_metrics()
+        status = "NOMINAL" if not warnings else "DEGRADED"
+        notes = "; ".join(warnings[:3]) if warnings else ""
         ops = build_console_lines(
             generated_at,
             source_name,
-            "NOMINAL",
+            status,
             open_count,
             stale_count,
             sla_sample,
             len([t for t in technicians if t.get("state") != "MISSING"]),
             rc_metrics,
         )
+        if warnings:
+            ops.append("> [AT] PARTIAL DATA MODE ENABLED")
         ticker = build_ticker_items(open_tickets, now)
+        if warnings:
+            ticker.append({"text": "PARTIAL REPORTING DATA - SOURCE ERRORS DETECTED", "level": "warn"})
 
         payload = {
             "meta": {
                 "source": source_name,
-                "status": "NOMINAL",
+                "status": status,
                 "generatedAt": generated_at,
+                **({"note": notes} if notes else {}),
             },
             "traffic": traffic,
             "labor": labor,
