@@ -21,7 +21,8 @@ AUTOTASK_SECRET = os.getenv("AUTOTASK_SECRET", "").strip()
 AUTOTASK_INTEGRATION_CODE = os.getenv("AUTOTASK_INTEGRATION_CODE", "").strip()
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "20"))
 STALE_HOURS = int(os.getenv("REFRESH_WINDOW_HOURS", "72"))
-CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "170"))
+CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "330"))
+STATUS_LABELS_TTL_SECONDS = int(os.getenv("STATUS_LABELS_TTL_SECONDS", "21600"))
 ENFORCE_IP_ALLOWLIST = os.getenv("ENFORCE_IP_ALLOWLIST", "true").lower() in {"1", "true", "yes", "on"}
 TECHOPS_ALLOWED_IPS_RAW = os.getenv("TECHOPS_ALLOWED_IPS", "")
 BASE_DIR = Path(__file__).resolve().parent
@@ -79,6 +80,8 @@ app.add_middleware(
 LAST_GOOD_PAYLOAD: Optional[Dict[str, Any]] = None
 MCP_SESSION_ID: Optional[str] = None
 ALLOWED_NETWORKS: List[ipaddress._BaseNetwork] = []
+TICKET_STATUS_LABELS: Dict[int, str] = {}
+TICKET_STATUS_LABELS_LOADED_AT: Optional[datetime] = None
 
 
 def parse_allowed_networks(raw: str) -> List[ipaddress._BaseNetwork]:
@@ -375,7 +378,17 @@ def ticket_status_text(ticket: Dict[str, Any]) -> str:
         if val is not None and str(val).strip():
             return str(val).strip()
     raw = ticket.get("status")
-    return str(raw).strip() if raw is not None else ""
+    if raw is None:
+        return ""
+    raw_str = str(raw).strip()
+    if not raw_str:
+        return ""
+    try:
+        status_id = int(raw_str)
+    except (TypeError, ValueError):
+        return raw_str
+    label = TICKET_STATUS_LABELS.get(status_id)
+    return label if label else raw_str
 
 
 def is_waiting_status(ticket: Dict[str, Any]) -> bool:
@@ -1311,6 +1324,55 @@ async def autotask_query(entity: str, filters: Optional[List[Dict[str, Any]]] = 
     return items[:max_records]
 
 
+async def load_ticket_status_labels(now: datetime) -> None:
+    global TICKET_STATUS_LABELS, TICKET_STATUS_LABELS_LOADED_AT
+    if (
+        TICKET_STATUS_LABELS
+        and TICKET_STATUS_LABELS_LOADED_AT is not None
+        and (now - TICKET_STATUS_LABELS_LOADED_AT).total_seconds() < STATUS_LABELS_TTL_SECONDS
+    ):
+        return
+    try:
+        if direct_autotask_enabled():
+            raw = await direct_autotask_request("GET", "Tickets/entityInformation/fields")
+        else:
+            raw = await call_tool(
+                "autotask_api_request",
+                {"method": "GET", "path": "Tickets/entityInformation/fields"},
+            )
+    except Exception:
+        return
+
+    fields = raw.get("fields") if isinstance(raw, dict) else None
+    if not isinstance(fields, list):
+        return
+    labels: Dict[int, str] = {}
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        name = str(field.get("name") or "").lower()
+        if name != "status":
+            continue
+        picklist = field.get("picklistValues")
+        if not isinstance(picklist, list):
+            break
+        for option in picklist:
+            if not isinstance(option, dict):
+                continue
+            try:
+                status_id = int(option.get("value"))
+            except (TypeError, ValueError):
+                continue
+            label = str(option.get("label") or "").strip()
+            if label:
+                labels[status_id] = label
+        break
+
+    if labels:
+        TICKET_STATUS_LABELS = labels
+        TICKET_STATUS_LABELS_LOADED_AT = now
+
+
 @app.get("/healthz")
 async def healthz() -> Dict[str, Any]:
     return {"status": "ok", "service": "techops-azure-adapter", "time": utc_now_iso()}
@@ -1338,6 +1400,7 @@ async def get_techops(request: Request) -> Dict[str, Any]:
     source_name = current_data_source()
 
     try:
+        await load_ticket_status_labels(now)
         open_tickets = await autotask_query(
             "Tickets",
             filters=[{"field": "status", "op": "noteq", "value": 5}],
