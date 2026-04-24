@@ -1444,8 +1444,12 @@ async def call_tool(tool_name: str, params: Dict[str, Any]) -> Any:
     return parse_content(second_json.get("result"))
 
 
+AUTOTASK_PAGE_LIMIT = 500
+
+
 async def autotask_query(entity: str, filters: Optional[List[Dict[str, Any]]] = None, max_records: int = 500) -> List[Dict[str, Any]]:
-    body: Dict[str, Any] = {"MaxRecords": max_records}
+    page_size = min(max_records, AUTOTASK_PAGE_LIMIT)
+    body: Dict[str, Any] = {"MaxRecords": page_size}
     if filters:
         body["Filter"] = filters
 
