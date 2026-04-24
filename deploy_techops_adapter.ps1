@@ -76,13 +76,33 @@ $exists = ($count -eq "1")
 if ($exists) {
     Write-Host "Updating existing Container App $ContainerAppName..."
     az containerapp secret set -n $ContainerAppName -g $ResourceGroup --secrets $secretArgs | Out-Null
-    az containerapp update -n $ContainerAppName -g $ResourceGroup `
-        --image $imageRef `
-        --set-env-vars $envVars `
-        --cpu 0.25 `
-        --memory 0.5Gi `
-        --min-replicas 0 `
-        --max-replicas 1 | Out-Null
+    if ($hasDirectAutotask) {
+        az containerapp update -n $ContainerAppName -g $ResourceGroup `
+            --image $imageRef `
+            --set-env-vars $envVars `
+            --cpu 0.25 `
+            --memory 0.5Gi `
+            --min-replicas 0 `
+            --max-replicas 1 | Out-Null
+    }
+    else {
+        az containerapp update -n $ContainerAppName -g $ResourceGroup `
+            --image $imageRef `
+            --set-env-vars $envVars `
+            --remove-env-vars AUTOTASK_BASE_URL AUTOTASK_USERNAME AUTOTASK_SECRET AUTOTASK_INTEGRATION_CODE `
+            --cpu 0.25 `
+            --memory 0.5Gi `
+            --min-replicas 0 `
+            --max-replicas 1 | Out-Null
+
+        Write-Host "Cleaning up unused direct Autotask secrets (if present)..."
+        $existingSecrets = (az containerapp secret list -n $ContainerAppName -g $ResourceGroup --query "[].name" -o tsv) -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+        $candidateSecrets = @($AutotaskUsernameSecretName, $AutotaskSecretSecretName, $AutotaskIntegrationCodeSecretName)
+        $toRemove = @($candidateSecrets | Where-Object { $existingSecrets -contains $_ })
+        if ($toRemove.Count -gt 0) {
+            az containerapp secret remove -n $ContainerAppName -g $ResourceGroup --secret-names $toRemove | Out-Null
+        }
+    }
 }
 else {
     Write-Host "Creating Container App $ContainerAppName..."
