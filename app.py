@@ -1,5 +1,7 @@
+import asyncio
 import ipaddress
 import json
+import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -13,6 +15,19 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+try:
+    from azure.identity.aio import DefaultAzureCredential
+    from azure.storage.blob.aio import BlobServiceClient
+    from azure.core.exceptions import ResourceNotFoundError
+    _AZURE_BLOB_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional dependency at import time
+    DefaultAzureCredential = None  # type: ignore
+    BlobServiceClient = None  # type: ignore
+    ResourceNotFoundError = Exception  # type: ignore
+    _AZURE_BLOB_AVAILABLE = False
+
+logger = logging.getLogger("techops.adapter")
+
 SMG_MCP_URL = os.getenv("SMG_MCP_URL", "https://smg-mcp.orangefield-2f3fdb87.westus3.azurecontainerapps.io/mcp")
 SMG_API_KEY = os.getenv("SMG_API_KEY", "")
 AUTOTASK_BASE_URL = os.getenv("AUTOTASK_BASE_URL", "").strip().rstrip("/")
@@ -23,6 +38,15 @@ REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "20"))
 STALE_HOURS = int(os.getenv("REFRESH_WINDOW_HOURS", "72"))
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "330"))
 STATUS_LABELS_TTL_SECONDS = int(os.getenv("STATUS_LABELS_TTL_SECONDS", "21600"))
+BLOB_ACCOUNT_URL = os.getenv("TECHOPS_BLOB_ACCOUNT_URL", "").strip()
+BLOB_CONTAINER = os.getenv("TECHOPS_BLOB_CONTAINER", "techops").strip()
+BLOB_LATEST_NAME = os.getenv("TECHOPS_BLOB_LATEST", "latest.json").strip()
+BLOB_WRITE_HISTORY = os.getenv("TECHOPS_BLOB_WRITE_HISTORY", "true").lower() in {"1", "true", "yes", "on"}
+SCHEDULE_ENABLED = os.getenv("TECHOPS_SCHEDULE_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+SCHEDULE_INTERVAL_SECONDS = int(os.getenv("TECHOPS_SCHEDULE_INTERVAL_SECONDS", str(30 * 60)))
+SCHEDULE_START_HOUR = int(os.getenv("TECHOPS_SCHEDULE_START_HOUR", "6"))
+SCHEDULE_END_HOUR = int(os.getenv("TECHOPS_SCHEDULE_END_HOUR", "18"))
+REFRESH_TOKEN = os.getenv("TECHOPS_REFRESH_TOKEN", "").strip()
 ENFORCE_IP_ALLOWLIST = os.getenv("ENFORCE_IP_ALLOWLIST", "true").lower() in {"1", "true", "yes", "on"}
 TECHOPS_ALLOWED_IPS_RAW = os.getenv("TECHOPS_ALLOWED_IPS", "")
 BASE_DIR = Path(__file__).resolve().parent
@@ -82,6 +106,10 @@ MCP_SESSION_ID: Optional[str] = None
 ALLOWED_NETWORKS: List[ipaddress._BaseNetwork] = []
 TICKET_STATUS_LABELS: Dict[int, str] = {}
 TICKET_STATUS_LABELS_LOADED_AT: Optional[datetime] = None
+BLOB_CLIENT: Optional["BlobServiceClient"] = None
+BLOB_CREDENTIAL: Optional["DefaultAzureCredential"] = None
+REFRESH_LOCK = asyncio.Lock()
+SCHEDULER_TASK: Optional[asyncio.Task] = None
 
 
 def parse_allowed_networks(raw: str) -> List[ipaddress._BaseNetwork]:
@@ -1516,6 +1544,280 @@ async def dashboard() -> FileResponse:
     return FileResponse(str(DASHBOARD_FILE), media_type="text/html")
 
 
+def get_blob_service_client() -> Optional["BlobServiceClient"]:
+    global BLOB_CLIENT, BLOB_CREDENTIAL
+    if BLOB_CLIENT is not None:
+        return BLOB_CLIENT
+    if not _AZURE_BLOB_AVAILABLE or not BLOB_ACCOUNT_URL:
+        return None
+    try:
+        BLOB_CREDENTIAL = DefaultAzureCredential()
+        BLOB_CLIENT = BlobServiceClient(account_url=BLOB_ACCOUNT_URL, credential=BLOB_CREDENTIAL)
+    except Exception as ex:  # pragma: no cover - credential init rarely fails at boot
+        logger.warning("Blob client init failed: %s", ex)
+        BLOB_CLIENT = None
+    return BLOB_CLIENT
+
+
+def history_blob_name(now: datetime) -> str:
+    local = now.astimezone(PACIFIC_TZ)
+    return f"history/{local:%Y/%m/%d/%H%M}.json"
+
+
+async def write_payload_to_blob(payload: Dict[str, Any], now: datetime) -> None:
+    client = get_blob_service_client()
+    if client is None:
+        return
+    try:
+        container = client.get_container_client(BLOB_CONTAINER)
+        body = json.dumps(payload, default=str).encode("utf-8")
+        await container.upload_blob(
+            name=BLOB_LATEST_NAME,
+            data=body,
+            overwrite=True,
+            content_type="application/json",
+        )
+        if BLOB_WRITE_HISTORY:
+            try:
+                await container.upload_blob(
+                    name=history_blob_name(now),
+                    data=body,
+                    overwrite=True,
+                    content_type="application/json",
+                )
+            except Exception as ex:
+                logger.warning("Blob history write failed: %s", ex)
+    except Exception as ex:
+        logger.warning("Blob latest write failed: %s", ex)
+
+
+async def read_payload_from_blob() -> Optional[Dict[str, Any]]:
+    client = get_blob_service_client()
+    if client is None:
+        return None
+    try:
+        container = client.get_container_client(BLOB_CONTAINER)
+        blob = container.get_blob_client(BLOB_LATEST_NAME)
+        stream = await blob.download_blob()
+        data = await stream.readall()
+        payload = json.loads(data.decode("utf-8"))
+        if isinstance(payload, dict):
+            return payload
+    except ResourceNotFoundError:
+        return None
+    except Exception as ex:
+        logger.warning("Blob latest read failed: %s", ex)
+    return None
+
+
+def _schedule_window_contains(dt_local: datetime) -> bool:
+    if SCHEDULE_START_HOUR == SCHEDULE_END_HOUR:
+        return False
+    hour = dt_local.hour
+    if SCHEDULE_START_HOUR < SCHEDULE_END_HOUR:
+        return SCHEDULE_START_HOUR <= hour < SCHEDULE_END_HOUR
+    return hour >= SCHEDULE_START_HOUR or hour < SCHEDULE_END_HOUR
+
+
+def _seconds_until_next_run(now: datetime) -> float:
+    local = now.astimezone(PACIFIC_TZ)
+    if _schedule_window_contains(local):
+        return float(SCHEDULE_INTERVAL_SECONDS)
+    target = local.replace(hour=SCHEDULE_START_HOUR, minute=0, second=0, microsecond=0)
+    if local >= target:
+        target = target + timedelta(days=1)
+    return max(30.0, (target - local).total_seconds())
+
+
+async def _scheduler_loop() -> None:
+    logger.info(
+        "techops scheduler started: every %ss within %02d:00-%02d:00 %s",
+        SCHEDULE_INTERVAL_SECONDS,
+        SCHEDULE_START_HOUR,
+        SCHEDULE_END_HOUR,
+        PACIFIC_TZ.key,
+    )
+    while True:
+        try:
+            now = utc_now()
+            local = now.astimezone(PACIFIC_TZ)
+            if _schedule_window_contains(local):
+                await refresh_techops_payload("schedule")
+            sleep_for = _seconds_until_next_run(utc_now())
+            await asyncio.sleep(sleep_for)
+        except asyncio.CancelledError:
+            raise
+        except Exception as ex:
+            logger.warning("Scheduler iteration error: %s", ex)
+            await asyncio.sleep(60)
+
+
+@app.on_event("startup")
+async def _on_startup() -> None:
+    global LAST_GOOD_PAYLOAD, SCHEDULER_TASK
+    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+    hydrated = await read_payload_from_blob()
+    if hydrated is not None:
+        LAST_GOOD_PAYLOAD = hydrated
+        logger.info(
+            "Hydrated LAST_GOOD_PAYLOAD from blob (generatedAt=%s)",
+            hydrated.get("meta", {}).get("generatedAt"),
+        )
+    if SCHEDULE_ENABLED:
+        SCHEDULER_TASK = asyncio.create_task(_scheduler_loop())
+
+
+@app.on_event("shutdown")
+async def _on_shutdown() -> None:
+    global BLOB_CLIENT, BLOB_CREDENTIAL, SCHEDULER_TASK
+    if SCHEDULER_TASK is not None:
+        SCHEDULER_TASK.cancel()
+        try:
+            await SCHEDULER_TASK
+        except (asyncio.CancelledError, Exception):
+            pass
+        SCHEDULER_TASK = None
+    if BLOB_CLIENT is not None:
+        try:
+            await BLOB_CLIENT.close()
+        except Exception:
+            pass
+        BLOB_CLIENT = None
+    if BLOB_CREDENTIAL is not None:
+        try:
+            await BLOB_CREDENTIAL.close()
+        except Exception:
+            pass
+        BLOB_CREDENTIAL = None
+
+
+async def build_live_payload(now: datetime) -> Dict[str, Any]:
+    recent_30d = now - timedelta(days=30)
+    source_name = current_data_source()
+
+    await load_ticket_status_labels(now)
+    open_tickets = await autotask_query(
+        "Tickets",
+        filters=[{"field": "status", "op": "noteq", "value": 5}],
+        max_records=500,
+    )
+    recent_tickets = await autotask_query(
+        "Tickets",
+        filters=[{"field": "createDate", "op": "gte", "value": to_iso_z(recent_30d)}],
+        max_records=700,
+    )
+    resolved_tickets = await autotask_query(
+        "Tickets",
+        filters=[{"field": "resolvedDateTime", "op": "gte", "value": to_iso_z(recent_30d)}],
+        max_records=700,
+    )
+    resources = await autotask_query("Resources", filters=[{"field": "isActive", "op": "eq", "value": True}], max_records=500)
+    today_entries = await autotask_query(
+        "TimeEntries",
+        filters=[{"field": "dateWorked", "op": "eq", "value": local_date_string(now)}],
+        max_records=500,
+    )
+    try:
+        utilization_rows = await fetch_utilization_summary(now)
+    except Exception:
+        utilization_rows = []
+
+    focus_resources = select_focus_resources(resources)
+    focus_ids = {int(x["id"]) for x in focus_resources if x.get("id") is not None}
+    focus_recent_tickets = [t for t in recent_tickets if assigned_resource_id(t) in focus_ids]
+    focus_resolved_tickets = [t for t in resolved_tickets if assigned_resource_id(t) in focus_ids]
+    focus_open_tickets = [t for t in open_tickets if assigned_resource_id(t) in focus_ids]
+    hours_by_id = build_time_entry_hours(today_entries)
+    utilization_by_id = build_utilization_map(focus_resources, utilization_rows)
+
+    generated_at = utc_now_iso()
+    open_count = len(open_tickets)
+    stale_count = count_stale_tickets(open_tickets, now)
+    waiting_customer_count = count_waiting_customer_tickets(open_tickets)
+    past_due_count = count_past_due_active_tickets(open_tickets, now)
+    sla_pct, sla_sample = compute_sla_compliance(recent_tickets, now)
+    avg_response_minutes = compute_avg_response_minutes(recent_tickets)
+    labor, targets = build_labor(focus_recent_tickets, now)
+    targets = build_target_summary(focus_resources, hours_by_id, utilization_by_id)
+    traffic = build_network_traffic(recent_tickets, now)
+    day_progress = build_day_progress(recent_tickets, resolved_tickets, now)
+    technicians = build_focus_technicians(
+        focus_open_tickets,
+        focus_resources,
+        hours_by_id,
+        utilization_by_id,
+        now,
+        focus_recent_tickets,
+    )
+    ticket_mix = build_ticket_mix(focus_resources, focus_open_tickets, focus_resolved_tickets, now)
+    ttr_by_tech = build_ttr_by_tech(focus_resources, focus_resolved_tickets, now)
+    network_status = build_network_status(open_tickets, now)
+    nodes = build_nodes(technicians)
+    try:
+        rc_metrics = await fetch_ringcentral_call_metrics(now)
+    except Exception:
+        rc_metrics = fallback_ringcentral_call_metrics()
+    kpis = build_kpis(
+        sla_pct,
+        avg_response_minutes,
+        open_count,
+        stale_count,
+        waiting_customer_count,
+        past_due_count,
+        rc_metrics,
+    )
+    ops = build_console_lines(
+        generated_at,
+        source_name,
+        "NOMINAL",
+        open_count,
+        stale_count,
+        sla_sample,
+        len([t for t in technicians if t.get("state") != "MISSING"]),
+        rc_metrics,
+    )
+    ticker = build_ticker_items(open_tickets, now)
+
+    return {
+        "meta": {
+            "source": source_name,
+            "status": "NOMINAL",
+            "generatedAt": generated_at,
+        },
+        "traffic": traffic,
+        "labor": labor,
+        "nodes": nodes,
+        "kpis": kpis,
+        "technicians": technicians,
+        "targets": targets,
+        "ops": ops,
+        "ticker": ticker,
+        "networkStatus": network_status,
+        "ticketMix": ticket_mix,
+        "ttrByTech": ttr_by_tech,
+        "dayProgress": day_progress,
+    }
+
+
+async def refresh_techops_payload(trigger: str) -> Optional[Dict[str, Any]]:
+    global LAST_GOOD_PAYLOAD
+
+    if not direct_autotask_enabled() and not SMG_API_KEY:
+        return None
+
+    async with REFRESH_LOCK:
+        now = utc_now()
+        try:
+            payload = await build_live_payload(now)
+        except Exception as ex:
+            logger.warning("techops refresh (%s) failed: %s", trigger, ex)
+            return None
+        LAST_GOOD_PAYLOAD = payload
+        await write_payload_to_blob(payload, now)
+        logger.info("techops refresh (%s) succeeded at %s", trigger, payload["meta"]["generatedAt"])
+        return payload
+
+
 @app.get("/api/techops")
 async def get_techops(request: Request) -> Dict[str, Any]:
     global LAST_GOOD_PAYLOAD
@@ -1527,122 +1829,43 @@ async def get_techops(request: Request) -> Dict[str, Any]:
     now = utc_now()
     if payload_is_fresh(LAST_GOOD_PAYLOAD, now):
         return LAST_GOOD_PAYLOAD
-    recent_30d = now - timedelta(days=30)
-    source_name = current_data_source()
 
-    try:
-        await load_ticket_status_labels(now)
-        open_tickets = await autotask_query(
-            "Tickets",
-            filters=[{"field": "status", "op": "noteq", "value": 5}],
-            max_records=500,
-        )
-        recent_tickets = await autotask_query(
-            "Tickets",
-            filters=[{"field": "createDate", "op": "gte", "value": to_iso_z(recent_30d)}],
-            max_records=700,
-        )
-        resolved_tickets = await autotask_query(
-            "Tickets",
-            filters=[{"field": "resolvedDateTime", "op": "gte", "value": to_iso_z(recent_30d)}],
-            max_records=700,
-        )
-        resources = await autotask_query("Resources", filters=[{"field": "isActive", "op": "eq", "value": True}], max_records=500)
-        today_entries = await autotask_query(
-            "TimeEntries",
-            filters=[{"field": "dateWorked", "op": "eq", "value": local_date_string(now)}],
-            max_records=500,
-        )
-        try:
-            utilization_rows = await fetch_utilization_summary(now)
-        except Exception:
-            utilization_rows = []
+    if LAST_GOOD_PAYLOAD is None:
+        hydrated = await read_payload_from_blob()
+        if hydrated is not None:
+            LAST_GOOD_PAYLOAD = hydrated
+            if payload_is_fresh(LAST_GOOD_PAYLOAD, now):
+                return LAST_GOOD_PAYLOAD
 
-        focus_resources = select_focus_resources(resources)
-        focus_ids = {int(x["id"]) for x in focus_resources if x.get("id") is not None}
-        focus_recent_tickets = [t for t in recent_tickets if assigned_resource_id(t) in focus_ids]
-        focus_resolved_tickets = [t for t in resolved_tickets if assigned_resource_id(t) in focus_ids]
-        focus_open_tickets = [t for t in open_tickets if assigned_resource_id(t) in focus_ids]
-        hours_by_id = build_time_entry_hours(today_entries)
-        utilization_by_id = build_utilization_map(focus_resources, utilization_rows)
-
-        generated_at = utc_now_iso()
-        open_count = len(open_tickets)
-        stale_count = count_stale_tickets(open_tickets, now)
-        waiting_customer_count = count_waiting_customer_tickets(open_tickets)
-        past_due_count = count_past_due_active_tickets(open_tickets, now)
-        sla_pct, sla_sample = compute_sla_compliance(recent_tickets, now)
-        avg_response_minutes = compute_avg_response_minutes(recent_tickets)
-        labor, targets = build_labor(focus_recent_tickets, now)
-        targets = build_target_summary(focus_resources, hours_by_id, utilization_by_id)
-        traffic = build_network_traffic(recent_tickets, now)
-        day_progress = build_day_progress(recent_tickets, resolved_tickets, now)
-        technicians = build_focus_technicians(
-            focus_open_tickets,
-            focus_resources,
-            hours_by_id,
-            utilization_by_id,
-            now,
-            focus_recent_tickets,
-        )
-        ticket_mix = build_ticket_mix(focus_resources, focus_open_tickets, focus_resolved_tickets, now)
-        ttr_by_tech = build_ttr_by_tech(focus_resources, focus_resolved_tickets, now)
-        network_status = build_network_status(open_tickets, now)
-        nodes = build_nodes(technicians)
-        try:
-            rc_metrics = await fetch_ringcentral_call_metrics(now)
-        except Exception:
-            rc_metrics = fallback_ringcentral_call_metrics()
-        kpis = build_kpis(
-            sla_pct,
-            avg_response_minutes,
-            open_count,
-            stale_count,
-            waiting_customer_count,
-            past_due_count,
-            rc_metrics,
-        )
-        ops = build_console_lines(
-            generated_at,
-            source_name,
-            "NOMINAL",
-            open_count,
-            stale_count,
-            sla_sample,
-            len([t for t in technicians if t.get("state") != "MISSING"]),
-            rc_metrics,
-        )
-        ticker = build_ticker_items(open_tickets, now)
-
-        payload = {
-            "meta": {
-                "source": source_name,
-                "status": "NOMINAL",
-                "generatedAt": generated_at,
-            },
-            "traffic": traffic,
-            "labor": labor,
-            "nodes": nodes,
-            "kpis": kpis,
-            "technicians": technicians,
-            "targets": targets,
-            "ops": ops,
-            "ticker": ticker,
-            "networkStatus": network_status,
-            "ticketMix": ticket_mix,
-            "ttrByTech": ttr_by_tech,
-            "dayProgress": day_progress,
+    refreshed = await refresh_techops_payload("dashboard")
+    if refreshed is not None:
+        return refreshed
+    if LAST_GOOD_PAYLOAD is not None:
+        cached = dict(LAST_GOOD_PAYLOAD)
+        cached["meta"] = {
+            "source": "CACHE_AZURE",
+            "status": "DEGRADED",
+            "generatedAt": utc_now_iso(),
+            "note": "Serving last-good snapshot; live pull failed",
         }
-        LAST_GOOD_PAYLOAD = payload
-        return payload
-    except Exception as ex:
-        if LAST_GOOD_PAYLOAD:
-            cached = dict(LAST_GOOD_PAYLOAD)
-            cached["meta"] = {
-                "source": "CACHE_AZURE",
-                "status": "DEGRADED",
-                "generatedAt": utc_now_iso(),
-                "note": f"Live pull failed: {str(ex)}",
-            }
-            return cached
-        return fallback_payload("SIM_AZURE", "DEGRADED", f"Live pull failed: {str(ex)}")
+        return cached
+    return fallback_payload("SIM_AZURE", "DEGRADED", "Live pull failed and no cached snapshot is available")
+
+
+@app.post("/api/techops/refresh")
+async def post_refresh(request: Request) -> Dict[str, Any]:
+    enforce_office_ip(request)
+    if REFRESH_TOKEN:
+        header_token = request.headers.get("x-techops-refresh-token", "").strip()
+        if not header_token or header_token != REFRESH_TOKEN:
+            raise HTTPException(status_code=401, detail="Invalid or missing refresh token.")
+
+    refreshed = await refresh_techops_payload("http")
+    if refreshed is None:
+        raise HTTPException(status_code=503, detail="Refresh failed; no payload was produced.")
+    meta = refreshed.get("meta", {}) if isinstance(refreshed, dict) else {}
+    return {
+        "status": "ok",
+        "generatedAt": meta.get("generatedAt"),
+        "source": meta.get("source"),
+    }
