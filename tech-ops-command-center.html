@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sierra Miles | TechOps Command Center</title>
+    <title>Sierra Miles | Tech-Ops Command Center</title>
     <style>
         :root {
             --bg: #020617;
@@ -294,11 +294,11 @@
         }
         .kpis {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr 1fr 1fr;
             gap: 8px;
         }
         .kpi {
-            padding: 10px;
+            padding: 10px 8px;
             border-radius: 12px;
             text-align: center;
             border: 1px solid rgba(51, 65, 85, 0.45);
@@ -312,7 +312,7 @@
         }
         .kpi .v {
             margin-top: 5px;
-            font-size: 23px;
+            font-size: 20px;
             font-weight: 800;
             font-family: Consolas, monospace;
         }
@@ -461,7 +461,12 @@
                 { l: "SLA COMPLIANCE", v: "N/A", c: "#10b981" },
                 { l: "AVG RESPONSE", v: "N/A", c: "#60a5fa" },
                 { l: "OPEN TICKETS", v: "0", c: "#f59e0b" },
-                { l: "STALE TICKETS", v: "0", c: "#f43f5e" }
+                { l: "WAITING CUSTOMER", v: "0", c: "#facc15" },
+                { l: "PAST DUE ACTIVE", v: "0", c: "#fb7185" },
+                { l: "STALE TICKETS", v: "0", c: "#f43f5e" },
+                { l: "RC RECEIVED (TODAY)", v: "N/A", c: "#38bdf8" },
+                { l: "RC MISSED (TODAY)", v: "N/A", c: "#ef4444" },
+                { l: "RC % CALLS TAKEN", v: "N/A", c: "#22c55e" }
             ],
             technicians: [
                 { name: "No Assigned Technicians", state: "IDLE", openTickets: 0, staleTickets: 0, utilizationPct: 0, utilizationColor: "#ef4444", hoursWorkedToday: 0 }
@@ -586,7 +591,7 @@
                     '<div class="title-wrap">',
                         '<div class="shield">SM</div>',
                         '<div>',
-                            '<h1 class="title">Sierra Miles <span>TechOps</span></h1>',
+                            '<h1 class="title">Sierra Miles <span>Tech-Ops</span></h1>',
                             '<div class="meta">',
                                 '<span class="dot" id="hbDot"></span>',
                                 '<span id="timeVal">--:--:--</span>',
@@ -640,7 +645,7 @@
                             '<div class="body" id="opsBody"></div>',
                         '</section>',
                         '<section class="threat">',
-                            '<div class="mini-title">TTR Today</div>',
+                            '<div class="mini-title">Time to Resolve (Today)</div>',
                             '<div id="ttrBars" class="mini-bars"></div>',
                         '</section>',
                     '</div>',
@@ -672,7 +677,7 @@
                         '<div class="bar open" title="Outstanding share" style="height:', open.toFixed(1), 'px"></div>',
                     '</div>',
                     '<div class="day">', esc(day.name || "---"), '</div>',
-                    '<div class="bar-label">R ', esc((Number(day.resolvedPct || 0)).toFixed(0)), '% / O ', esc((Number(day.openPct || 0)).toFixed(0)), '%</div>',
+                    '<div class="bar-label">RES ', esc((Number(day.resolvedPct || 0)).toFixed(0)), '% / OPEN ', esc((Number(day.openPct || 0)).toFixed(0)), '%</div>',
                 '</div>'
             ].join("");
         }).join("");
@@ -692,9 +697,9 @@
                 '<div class="row">',
                     '<div class="row-main">',
                         '<span class="name">', esc(t.name || "Unassigned"), '</span>',
-                        '<div class="meta-line">OPEN ', esc(t.openTickets || 0), ' | STALE ', esc(t.staleTickets || 0), ' | HRS ', esc((Number(t.hoursWorkedToday || 0)).toFixed(1)), '</div>',
+                        '<div class="meta-line">OPEN ', esc(t.openTickets || 0), ' | STALE ', esc(t.staleTickets || 0), ' | HRS WORKED ', esc((Number(t.hoursWorkedToday || 0)).toFixed(1)), '</div>',
                     '</div>',
-                    '<span class="state" style="color:', esc(t.utilizationColor || "#94a3b8"), ';">', esc((Number(t.utilizationPct || 0)).toFixed(0)), '%</span>',
+                    '<span class="state" style="color:', esc(t.utilizationColor || "#94a3b8"), ';" title="Utilization">UTIL ', esc((Number(t.utilizationPct || 0)).toFixed(0)), '%</span>',
                 '</div>'
             ].join("");
         });

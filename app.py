@@ -902,8 +902,13 @@ def build_kpis(
     stale_count: int,
     waiting_customer_count: int,
     past_due_count: int,
+    rc_metrics: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, str]]:
     avg_text = f"{avg_response_minutes}m" if avg_response_minutes is not None else "N/A"
+    rc = rc_metrics or {}
+    received = int(rc.get("receivedToday", 0) or 0)
+    missed_calls = int(rc.get("inboundMissedToday", rc.get("missedToday", 0)) or 0)
+    pct_taken = float(rc.get("pctCallsTakenToday", 0.0) or 0.0)
     return [
         {"l": "SLA COMPLIANCE", "v": f"{sla_pct:.1f}%", "c": "#10b981"},
         {"l": "AVG RESPONSE", "v": avg_text, "c": "#60a5fa"},
@@ -911,6 +916,9 @@ def build_kpis(
         {"l": "WAITING CUSTOMER", "v": str(waiting_customer_count), "c": "#facc15"},
         {"l": "PAST DUE ACTIVE", "v": str(past_due_count), "c": "#fb7185"},
         {"l": "STALE TICKETS", "v": str(stale_count), "c": "#f43f5e"},
+        {"l": "RC RECEIVED (TODAY)", "v": str(received), "c": "#38bdf8"},
+        {"l": "RC MISSED (TODAY)", "v": str(missed_calls), "c": "#ef4444"},
+        {"l": "RC % CALLS TAKEN", "v": f"{pct_taken:.1f}%", "c": "#22c55e"},
     ]
 
 
@@ -949,6 +957,8 @@ async def fetch_ringcentral_call_metrics(today: datetime) -> Dict[str, Any]:
     answered = 0
     missed = 0
     inbound_taken = 0
+    inbound_received = 0
+    inbound_missed = 0
     outbound_made = 0
     on_phone_minutes = 0
     for record in records:
@@ -963,12 +973,22 @@ async def fetch_ringcentral_call_metrics(today: datetime) -> Dict[str, Any]:
         on_phone_minutes += int(round(float(record.get("duration") or 0) / 60.0))
         if direction == "outbound":
             outbound_made += 1
-        elif direction == "inbound" and ("connected" in result or "accepted" in result or "phone call" in action):
-            inbound_taken += 1
+        elif direction == "inbound":
+            inbound_received += 1
+            if "connected" in result or "accepted" in result or "phone call" in action:
+                inbound_taken += 1
+            if "missed" in result:
+                inbound_missed += 1
         if "missed" in result:
             missed += 1
         elif "connected" in result or "accepted" in result or ("phone call" in action and direction == "inbound"):
             answered += 1
+
+    pct_calls_taken = (
+        round((inbound_taken / inbound_received) * 100.0, 1)
+        if inbound_received > 0
+        else 0.0
+    )
 
     extension_name = ""
     if records and isinstance(records[0], dict):
@@ -981,6 +1001,9 @@ async def fetch_ringcentral_call_metrics(today: datetime) -> Dict[str, Any]:
         "answeredToday": answered,
         "missedToday": missed,
         "inboundTakenToday": inbound_taken,
+        "receivedToday": inbound_received,
+        "inboundMissedToday": inbound_missed,
+        "pctCallsTakenToday": pct_calls_taken,
         "outboundMadeToday": outbound_made,
         "onPhoneMinutesToday": on_phone_minutes,
         "abandonedToday": missed,
@@ -995,6 +1018,9 @@ def fallback_ringcentral_call_metrics() -> Dict[str, Any]:
         "answeredToday": 0,
         "missedToday": 0,
         "inboundTakenToday": 0,
+        "receivedToday": 0,
+        "inboundMissedToday": 0,
+        "pctCallsTakenToday": 0.0,
         "outboundMadeToday": 0,
         "onPhoneMinutesToday": 0,
         "abandonedToday": 0,
@@ -1113,7 +1139,12 @@ def fallback_payload(source: str, status: str, note: str) -> Dict[str, Any]:
             {"l": "SLA COMPLIANCE", "v": "N/A", "c": "#10b981"},
             {"l": "AVG RESPONSE", "v": "N/A", "c": "#60a5fa"},
             {"l": "OPEN TICKETS", "v": "0", "c": "#f59e0b"},
+            {"l": "WAITING CUSTOMER", "v": "0", "c": "#facc15"},
+            {"l": "PAST DUE ACTIVE", "v": "0", "c": "#fb7185"},
             {"l": "STALE TICKETS", "v": "0", "c": "#f43f5e"},
+            {"l": "RC RECEIVED (TODAY)", "v": "N/A", "c": "#38bdf8"},
+            {"l": "RC MISSED (TODAY)", "v": "N/A", "c": "#ef4444"},
+            {"l": "RC % CALLS TAKEN", "v": "N/A", "c": "#22c55e"},
         ],
         "technicians": [
             {
@@ -1356,11 +1387,19 @@ async def get_techops(request: Request) -> Dict[str, Any]:
         ttr_by_tech = build_ttr_by_tech(focus_resources, focus_resolved_tickets, now)
         network_status = build_network_status(open_tickets, now)
         nodes = build_nodes(technicians)
-        kpis = build_kpis(sla_pct, avg_response_minutes, open_count, stale_count, waiting_customer_count, past_due_count)
         try:
             rc_metrics = await fetch_ringcentral_call_metrics(now)
         except Exception:
             rc_metrics = fallback_ringcentral_call_metrics()
+        kpis = build_kpis(
+            sla_pct,
+            avg_response_minutes,
+            open_count,
+            stale_count,
+            waiting_customer_count,
+            past_due_count,
+            rc_metrics,
+        )
         ops = build_console_lines(
             generated_at,
             source_name,
