@@ -1473,13 +1473,17 @@ async def autotask_query(entity: str, filters: Optional[List[Dict[str, Any]]] = 
     page_count = 1
 
     while next_path and len(items) < max_records and page_count < 5:
-        if direct_autotask_enabled():
-            next_page = await direct_autotask_request("GET", next_path)
-        else:
-            next_page = await call_tool(
-                "autotask_api_request",
-                {"method": "GET", "path": next_path},
-            )
+        try:
+            if direct_autotask_enabled():
+                next_page = await direct_autotask_request("POST", next_path)
+            else:
+                next_page = await call_tool(
+                    "autotask_api_request",
+                    {"method": "POST", "path": next_path},
+                )
+        except Exception as ex:
+            logger.warning("Autotask pagination halted at page %d: %s", page_count, ex)
+            break
         items.extend(coerce_items(next_page))
         page_details = next_page.get("pageDetails") if isinstance(next_page, dict) else {}
         next_url = page_details.get("nextPageUrl") if isinstance(page_details, dict) else None
@@ -1710,12 +1714,12 @@ async def build_live_payload(now: datetime) -> Dict[str, Any]:
     recent_tickets = await autotask_query(
         "Tickets",
         filters=[{"field": "createDate", "op": "gte", "value": to_iso_z(recent_30d)}],
-        max_records=700,
+        max_records=500,
     )
     resolved_tickets = await autotask_query(
         "Tickets",
         filters=[{"field": "resolvedDateTime", "op": "gte", "value": to_iso_z(recent_30d)}],
-        max_records=700,
+        max_records=500,
     )
     resources = await autotask_query("Resources", filters=[{"field": "isActive", "op": "eq", "value": True}], max_records=500)
     today_entries = await autotask_query(
