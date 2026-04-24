@@ -53,7 +53,15 @@ $envVars = @(
     "SMG_API_KEY=secretref:smg-api-key",
     "REFRESH_WINDOW_HOURS=$RefreshWindowHours",
     "TECHOPS_ALLOWED_IPS=$OfficeIpCidr",
-    "ENFORCE_IP_ALLOWLIST=$EnforceIpAllowlist"
+    "ENFORCE_IP_ALLOWLIST=$EnforceIpAllowlist",
+    "TECHOPS_BLOB_ACCOUNT_URL=https://smgmcpstorage.blob.core.windows.net",
+    "TECHOPS_BLOB_CONTAINER=techops",
+    "TECHOPS_BLOB_LATEST=latest.json",
+    "TECHOPS_BLOB_WRITE_HISTORY=true",
+    "TECHOPS_SCHEDULE_ENABLED=true",
+    "TECHOPS_SCHEDULE_INTERVAL_SECONDS=1800",
+    "TECHOPS_SCHEDULE_START_HOUR=6",
+    "TECHOPS_SCHEDULE_END_HOUR=18"
 )
 $secretArgs = @("smg-api-key=$apiKey")
 if ($hasDirectAutotask) {

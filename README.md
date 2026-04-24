@@ -78,4 +78,4 @@ Or use query-string override:
 
 - Host the HTML widget in YoDeck.
 - Ensure it points to the adapter API URL above.
-- Keep refresh interval at 180 seconds.
+- Keep refresh interval at 300 seconds (matches `CACHE_TTL_SECONDS` so most polls hit the cache and avoid Autotask rate-limit / upstream circuit-breaker pressure).

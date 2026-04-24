@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sierra Miles | TechOps Command Center</title>
+    <title>Sierra Miles | Tech-Ops Command Center</title>
     <style>
         :root {
             --bg: #020617;
@@ -191,42 +191,102 @@
         .engineers {
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 12px;
             overflow: auto;
             max-height: 100%;
         }
         .row {
-            display: flex;
-            gap: 10px;
-            align-items: flex-start;
-            padding: 10px;
-            border-radius: 12px;
-            border: 1px solid rgba(51, 65, 85, 0.5);
-            background: rgba(2, 6, 23, 0.45);
+            display: block;
+            padding: 14px 16px;
+            border-radius: 14px;
+            border: 1px solid rgba(51, 65, 85, 0.55);
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.75), rgba(2, 6, 23, 0.55));
         }
-        .row-main {
-            flex: 1;
-            min-width: 0;
+        .row-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 10px;
         }
         .row .name {
             display: block;
-            font-size: 12px;
+            font-size: 18px;
             font-weight: 800;
-            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--text);
         }
-        .row .meta-line {
-            margin-top: 4px;
-            color: var(--muted);
-            font-size: 9px;
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
-            font-family: Consolas, monospace;
-        }
-        .row .state {
-            font-size: 10px;
-            letter-spacing: 0.08em;
+        .row .util {
+            font-size: 20px;
             font-weight: 900;
             font-family: Consolas, monospace;
+            letter-spacing: 0.04em;
+        }
+        .row .util .util-label {
+            display: block;
+            font-size: 9px;
+            font-weight: 700;
+            color: var(--muted);
+            letter-spacing: 0.12em;
+            text-align: right;
+            margin-bottom: 2px;
+        }
+        .util-bar {
+            height: 8px;
+            background: rgba(51, 65, 85, 0.55);
+            border-radius: 6px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+        .util-bar > span {
+            display: block;
+            height: 100%;
+            border-radius: 6px;
+            transition: width 600ms ease;
+        }
+        .stat-chips {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+        }
+        .stat-chips.secondary {
+            grid-template-columns: repeat(4, 1fr);
+            margin-top: 6px;
+        }
+        .stat-chip.warn .chip-value {
+            color: #facc15;
+        }
+        .stat-chip.neutral .chip-value {
+            color: #60a5fa;
+        }
+        .stat-chip.good .chip-value {
+            color: #22c55e;
+        }
+        .stat-chip {
+            padding: 6px 8px;
+            border-radius: 8px;
+            background: rgba(15, 23, 42, 0.7);
+            border: 1px solid rgba(51, 65, 85, 0.45);
+            text-align: center;
+        }
+        .stat-chip .chip-label {
+            display: block;
+            font-size: 9px;
+            font-weight: 700;
+            color: var(--muted);
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+        .stat-chip .chip-value {
+            display: block;
+            margin-top: 2px;
+            font-size: 16px;
+            font-weight: 800;
+            font-family: Consolas, monospace;
+            color: var(--text);
+        }
+        .stat-chip.alert .chip-value {
+            color: #f43f5e;
         }
         .bars {
             height: 220px;
@@ -273,11 +333,44 @@
             font-family: Consolas, monospace;
         }
         .spark-wrap {
-            height: 120px;
+            height: 150px;
             padding: 8px;
             border-radius: 12px;
             border: 1px solid rgba(71, 85, 105, 0.35);
             background: rgba(2, 6, 23, 0.35);
+            position: relative;
+        }
+        .flow-legend {
+            display: flex;
+            gap: 14px;
+            align-items: center;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 6px;
+        }
+        .flow-legend .swatch {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            margin-right: 6px;
+            vertical-align: middle;
+        }
+        .flow-legend .total {
+            color: var(--text);
+            font-family: Consolas, monospace;
+            margin-left: 4px;
+        }
+        .flow-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 9px;
+            color: var(--muted);
+            font-family: Consolas, monospace;
+            margin-top: 4px;
         }
         .alert-strip {
             margin-bottom: 10px;
@@ -294,11 +387,11 @@
         }
         .kpis {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr 1fr 1fr;
             gap: 8px;
         }
         .kpi {
-            padding: 10px;
+            padding: 10px 8px;
             border-radius: 12px;
             text-align: center;
             border: 1px solid rgba(51, 65, 85, 0.45);
@@ -312,7 +405,7 @@
         }
         .kpi .v {
             margin-top: 5px;
-            font-size: 23px;
+            font-size: 20px;
             font-weight: 800;
             font-family: Consolas, monospace;
         }
@@ -435,7 +528,7 @@
 (() => {
     "use strict";
 
-    const REFRESH_SECONDS = 180;
+    const REFRESH_SECONDS = 300;
     const REFRESH_MS = REFRESH_SECONDS * 1000;
     const CACHE_KEY = "techops.command_center.cache.v3";
     const API_URL_KEY = "techops.api.url";
@@ -461,17 +554,32 @@
                 { l: "SLA COMPLIANCE", v: "N/A", c: "#10b981" },
                 { l: "AVG RESPONSE", v: "N/A", c: "#60a5fa" },
                 { l: "OPEN TICKETS", v: "0", c: "#f59e0b" },
-                { l: "STALE TICKETS", v: "0", c: "#f43f5e" }
+                { l: "WAITING CUSTOMER", v: "0", c: "#facc15" },
+                { l: "PAST DUE ACTIVE", v: "0", c: "#fb7185" },
+                { l: "STALE TICKETS", v: "0", c: "#f43f5e" },
+                { l: "RC RECEIVED (TODAY)", v: "N/A", c: "#38bdf8" },
+                { l: "RC MISSED (TODAY)", v: "N/A", c: "#ef4444" },
+                { l: "RC % CALLS TAKEN", v: "N/A", c: "#22c55e" }
             ],
             technicians: [
-                { name: "No Assigned Technicians", state: "IDLE", openTickets: 0, staleTickets: 0, utilizationPct: 0, utilizationColor: "#ef4444", hoursWorkedToday: 0 }
+                { name: "No Assigned Technicians", state: "IDLE", openTickets: 0, staleTickets: 0, waitingCustomer: 0, pastDueActive: 0, slaPct: 0, slaSample: 0, avgResponseMinutes: null, utilizationPct: 0, utilizationColor: "#ef4444", hoursWorkedToday: 0 }
             ],
             targets: { dayPct: 0, weekPct: 0 },
             ops: ["> [AT] Waiting for live data"],
             ticker: [{ text: "AUTOTASK MONITORING STARTING", level: "normal" }],
             networkStatus: { active: false, clientName: "", deviceCount: 0, openFor: "" },
             ticketMix: [],
-            ttrByTech: []
+            ttrByTech: [],
+            dayProgress: {
+                startIso: "",
+                nowIso: "",
+                bucketMinutes: 15,
+                elapsedMinutes: 0,
+                incoming: [],
+                resolved: [],
+                incomingTotal: 0,
+                resolvedTotal: 0
+            }
         };
     }
 
@@ -532,6 +640,11 @@
                 state: String(t.state || "ACTIVE"),
                 openTickets: Number(t.openTickets || 0),
                 staleTickets: Number(t.staleTickets || 0),
+                waitingCustomer: Number(t.waitingCustomer || 0),
+                pastDueActive: Number(t.pastDueActive || 0),
+                slaPct: Number(t.slaPct || 0),
+                slaSample: Number(t.slaSample || 0),
+                avgResponseMinutes: t.avgResponseMinutes === null || t.avgResponseMinutes === undefined ? null : Number(t.avgResponseMinutes),
                 utilizationPct: Number(t.utilizationPct || 0),
                 utilizationColor: String(t.utilizationColor || "#94a3b8"),
                 hoursWorkedToday: Number(t.hoursWorkedToday || 0)
@@ -563,7 +676,21 @@
                 minutes: Number(item.minutes || 0),
                 label: String(item.label || "N/A"),
                 count: Number(item.count || 0)
-            })) : fallback.ttrByTech
+            })) : fallback.ttrByTech,
+            dayProgress: root.dayProgress && typeof root.dayProgress === "object" ? {
+                startIso: String(root.dayProgress.startIso || ""),
+                nowIso: String(root.dayProgress.nowIso || ""),
+                bucketMinutes: Number(root.dayProgress.bucketMinutes || 15),
+                elapsedMinutes: Number(root.dayProgress.elapsedMinutes || 0),
+                incoming: Array.isArray(root.dayProgress.incoming) ? root.dayProgress.incoming.map(p => ({
+                    m: Number(p.m || 0), v: Number(p.v || 0)
+                })) : [],
+                resolved: Array.isArray(root.dayProgress.resolved) ? root.dayProgress.resolved.map(p => ({
+                    m: Number(p.m || 0), v: Number(p.v || 0)
+                })) : [],
+                incomingTotal: Number(root.dayProgress.incomingTotal || 0),
+                resolvedTotal: Number(root.dayProgress.resolvedTotal || 0)
+            } : fallback.dayProgress
         };
     }
 
@@ -586,11 +713,11 @@
                     '<div class="title-wrap">',
                         '<div class="shield">SM</div>',
                         '<div>',
-                            '<h1 class="title">Sierra Miles <span>TechOps</span></h1>',
+                            '<h1 class="title">Sierra Miles <span>Tech-Ops</span></h1>',
                             '<div class="meta">',
                                 '<span class="dot" id="hbDot"></span>',
                                 '<span id="timeVal">--:--:--</span>',
-                                '<span>SYNC: <span id="syncVal">180</span>s</span>',
+                                '<span>SYNC: <span id="syncVal">300</span>s</span>',
                                 '<span>STATE: <span id="stateVal" class="ok">NOMINAL</span></span>',
                                 '<span>LAST: <span id="lastVal">--:--:--</span></span>',
                             '</div>',
@@ -621,13 +748,23 @@
                             '<div id="bars" class="bars"></div>',
                         '</section>',
                         '<section class="panel">',
-                            '<h3 style="color:#f43f5e;">Network Anomalies</h3>',
+                            '<h3>Ticket Flow (Since 7 AM, excludes alerts)</h3>',
                             '<div id="networkAlert" class="alert-strip"></div>',
+                            '<div class="flow-legend">',
+                                '<span><span class="swatch" style="background:#38bdf8;"></span>Incoming<span class="total" id="flowInTotal">0</span></span>',
+                                '<span><span class="swatch" style="background:#22c55e;"></span>Closed<span class="total" id="flowOutTotal">0</span></span>',
+                            '</div>',
                             '<div class="spark-wrap">',
-                                '<svg width="100%" height="100%" viewBox="0 0 600 100" preserveAspectRatio="none">',
-                                    '<path id="sparkArea" d="" fill="rgba(239,68,68,0.18)"></path>',
-                                    '<path id="sparkLine" d="" stroke="#ef4444" stroke-width="2.5" fill="none"></path>',
+                                '<svg width="100%" height="100%" viewBox="0 0 600 120" preserveAspectRatio="none">',
+                                    '<path id="flowInArea" d="" fill="rgba(56,189,248,0.18)"></path>',
+                                    '<path id="flowInLine" d="" stroke="#38bdf8" stroke-width="2.5" fill="none"></path>',
+                                    '<path id="flowOutArea" d="" fill="rgba(34,197,94,0.14)"></path>',
+                                    '<path id="flowOutLine" d="" stroke="#22c55e" stroke-width="2.5" fill="none"></path>',
                                 '</svg>',
+                            '</div>',
+                            '<div class="flow-meta">',
+                                '<span id="flowStart">--:--</span>',
+                                '<span id="flowNow">--:--</span>',
                             '</div>',
                         '</section>',
                     '</div>',
@@ -635,13 +772,13 @@
                         '<section class="panel">',
                             '<div id="kpis" class="kpis"></div>',
                         '</section>',
+                        '<section class="threat">',
+                            '<div class="mini-title">Time to Resolve (Today)</div>',
+                            '<div id="ttrBars" class="mini-bars"></div>',
+                        '</section>',
                         '<section class="ops" style="flex:1;">',
                             '<div class="head">Ops Console</div>',
                             '<div class="body" id="opsBody"></div>',
-                        '</section>',
-                        '<section class="threat">',
-                            '<div class="mini-title">TTR Today</div>',
-                            '<div id="ttrBars" class="mini-bars"></div>',
                         '</section>',
                     '</div>',
                 '</main>',
@@ -672,7 +809,7 @@
                         '<div class="bar open" title="Outstanding share" style="height:', open.toFixed(1), 'px"></div>',
                     '</div>',
                     '<div class="day">', esc(day.name || "---"), '</div>',
-                    '<div class="bar-label">R ', esc((Number(day.resolvedPct || 0)).toFixed(0)), '% / O ', esc((Number(day.openPct || 0)).toFixed(0)), '%</div>',
+                    '<div class="bar-label">RES ', esc((Number(day.resolvedPct || 0)).toFixed(0)), '% / OPEN ', esc((Number(day.openPct || 0)).toFixed(0)), '%</div>',
                 '</div>'
             ].join("");
         }).join("");
@@ -687,14 +824,39 @@
     function renderEngineers(technicians) {
         const el = document.getElementById("engineers");
         if (!el) return;
-        const rows = (technicians && technicians.length ? technicians : [{ name: "No Assigned Technicians", state: "IDLE", utilizationPct: 0, utilizationColor: "#ef4444", openTickets: 0, staleTickets: 0, hoursWorkedToday: 0 }]).map(t => {
+        const rows = (technicians && technicians.length ? technicians : [{ name: "No Assigned Technicians", state: "IDLE", utilizationPct: 0, utilizationColor: "#ef4444", openTickets: 0, staleTickets: 0, waitingCustomer: 0, pastDueActive: 0, slaPct: 0, slaSample: 0, avgResponseMinutes: null, hoursWorkedToday: 0 }]).map(t => {
+            const pct = Math.max(0, Math.min(100, Number(t.utilizationPct || 0)));
+            const color = String(t.utilizationColor || "#38bdf8");
+            const stale = Number(t.staleTickets || 0);
+            const waiting = Number(t.waitingCustomer || 0);
+            const pastDue = Number(t.pastDueActive || 0);
+            const slaPct = Number(t.slaPct || 0);
+            const slaSample = Number(t.slaSample || 0);
+            const slaText = slaSample > 0 ? slaPct.toFixed(0) + "%" : "N/A";
+            const slaClass = slaSample === 0 ? "stat-chip" : (slaPct >= 90 ? "stat-chip good" : (slaPct >= 75 ? "stat-chip warn" : "stat-chip alert"));
+            const avg = (t.avgResponseMinutes === null || t.avgResponseMinutes === undefined) ? null : Number(t.avgResponseMinutes);
+            const avgText = avg === null || !isFinite(avg) ? "N/A" : (avg + "m");
             return [
                 '<div class="row">',
-                    '<div class="row-main">',
+                    '<div class="row-head">',
                         '<span class="name">', esc(t.name || "Unassigned"), '</span>',
-                        '<div class="meta-line">OPEN ', esc(t.openTickets || 0), ' | STALE ', esc(t.staleTickets || 0), ' | HRS ', esc((Number(t.hoursWorkedToday || 0)).toFixed(1)), '</div>',
+                        '<div class="util" style="color:', esc(color), ';">',
+                            '<span class="util-label">Utilization</span>',
+                            esc(pct.toFixed(0)), '%',
+                        '</div>',
                     '</div>',
-                    '<span class="state" style="color:', esc(t.utilizationColor || "#94a3b8"), ';">', esc((Number(t.utilizationPct || 0)).toFixed(0)), '%</span>',
+                    '<div class="util-bar"><span style="width:', pct.toFixed(1), '%; background:', esc(color), ';"></span></div>',
+                    '<div class="stat-chips">',
+                        '<div class="stat-chip"><span class="chip-label">Open</span><span class="chip-value">', esc(Number(t.openTickets || 0)), '</span></div>',
+                        '<div class="', (stale > 0 ? 'stat-chip alert' : 'stat-chip'), '"><span class="chip-label">Stale</span><span class="chip-value">', esc(stale), '</span></div>',
+                        '<div class="stat-chip"><span class="chip-label">Hrs Worked</span><span class="chip-value">', esc((Number(t.hoursWorkedToday || 0)).toFixed(1)), '</span></div>',
+                    '</div>',
+                    '<div class="stat-chips secondary">',
+                        '<div class="', slaClass, '"><span class="chip-label">SLA</span><span class="chip-value">', esc(slaText), '</span></div>',
+                        '<div class="stat-chip neutral"><span class="chip-label">Avg Resp</span><span class="chip-value">', esc(avgText), '</span></div>',
+                        '<div class="', (waiting > 0 ? 'stat-chip warn' : 'stat-chip'), '"><span class="chip-label">Wait Cust</span><span class="chip-value">', esc(waiting), '</span></div>',
+                        '<div class="', (pastDue > 0 ? 'stat-chip alert' : 'stat-chip'), '"><span class="chip-label">Past Due</span><span class="chip-value">', esc(pastDue), '</span></div>',
+                    '</div>',
                 '</div>'
             ].join("");
         });
@@ -712,14 +874,56 @@
         ].join("")).join("");
     }
 
-    function renderSpark(traffic) {
-        const vals = traffic.map(t => Number(t.v || 0));
-        const line = sparklinePath(vals, 600, 95);
-        const area = line ? (line + " L 600 100 L 0 100 Z") : "";
-        const lineEl = document.getElementById("sparkLine");
-        const areaEl = document.getElementById("sparkArea");
-        if (lineEl) lineEl.setAttribute("d", line);
-        if (areaEl) areaEl.setAttribute("d", area);
+    function formatHm(iso) {
+        if (!iso) return "--:--";
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return "--:--";
+        return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+
+    function buildCumulativePath(series, width, height, sharedMax) {
+        if (!series.length) return { line: "", area: "" };
+        const max = Math.max(sharedMax || 0, 1);
+        const lastIdx = series.length - 1 || 1;
+        const points = series.map((p, i) => {
+            const x = (i / lastIdx) * width;
+            const y = height - (Number(p.v || 0) / max) * (height - 4);
+            return { x: Number(x.toFixed(1)), y: Number(y.toFixed(1)) };
+        });
+        const line = points.map((pt, i) => (i === 0 ? "M " : "L ") + pt.x + " " + pt.y).join(" ");
+        const first = points[0];
+        const last = points[points.length - 1];
+        const area = line + " L " + last.x + " " + height + " L " + first.x + " " + height + " Z";
+        return { line: line, area: area };
+    }
+
+    function renderFlow(dayProgress) {
+        const dp = dayProgress || { incoming: [], resolved: [], incomingTotal: 0, resolvedTotal: 0 };
+        const incoming = Array.isArray(dp.incoming) ? dp.incoming : [];
+        const resolved = Array.isArray(dp.resolved) ? dp.resolved : [];
+        const sharedMax = Math.max(
+            incoming.reduce((m, p) => Math.max(m, Number(p.v || 0)), 0),
+            resolved.reduce((m, p) => Math.max(m, Number(p.v || 0)), 0),
+            1
+        );
+        const inPath = buildCumulativePath(incoming, 600, 120, sharedMax);
+        const outPath = buildCumulativePath(resolved, 600, 120, sharedMax);
+        const setAttr = (id, v) => {
+            const el = document.getElementById(id);
+            if (el) el.setAttribute("d", v);
+        };
+        setAttr("flowInLine", inPath.line);
+        setAttr("flowInArea", inPath.area);
+        setAttr("flowOutLine", outPath.line);
+        setAttr("flowOutArea", outPath.area);
+        const setText = (id, v) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = v;
+        };
+        setText("flowInTotal", String(dp.incomingTotal || 0));
+        setText("flowOutTotal", String(dp.resolvedTotal || 0));
+        setText("flowStart", "Since " + formatHm(dp.startIso));
+        setText("flowNow", "Now " + formatHm(dp.nowIso));
     }
 
     function renderNetworkStatus(networkStatus) {
@@ -797,7 +1001,7 @@
     function applyPayload(payload) {
         renderNodes(payload.nodes);
         renderBars(payload.ticketMix);
-        renderSpark(payload.traffic);
+        renderFlow(payload.dayProgress);
         renderNetworkStatus(payload.networkStatus);
         renderKpis(payload.kpis);
         renderEngineers(payload.technicians);
