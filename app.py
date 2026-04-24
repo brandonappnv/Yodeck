@@ -743,17 +743,18 @@ def compute_sla_compliance(recent_tickets: List[Dict[str, Any]], now: datetime) 
 
 def compute_avg_response_minutes(recent_tickets: List[Dict[str, Any]]) -> Optional[int]:
     values: List[float] = []
+    max_minutes = 60 * 24 * 7
     for t in recent_tickets:
-        created = ticket_created_dt(t)
-        first = parse_dt(t.get("firstResponseDateTime"))
-        if not created or not first:
+        raw = t.get("firstResponseTime")
+        if raw is None:
             continue
-        delta_min = (first - created).total_seconds() / 60.0
-        if delta_min < 0:
+        try:
+            minutes = float(raw)
+        except (TypeError, ValueError):
             continue
-        if delta_min > 60 * 24 * 7:
+        if minutes <= 0 or minutes > max_minutes:
             continue
-        values.append(delta_min)
+        values.append(minutes)
     if not values:
         return None
     return int(round(sum(values) / len(values)))
